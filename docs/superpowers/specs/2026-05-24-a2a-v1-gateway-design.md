@@ -79,18 +79,26 @@ Async HTTP client for Hermes Agent API Server.
 
 | Method | Description |
 |--------|-------------|
-| `send_message(text, session_id=None) → HermesResponse` | Send message, get full response |
-| `stream_message(text, session_id=None) → AsyncIterator[str]` | Stream tokens via SSE |
-| `cancel_session(session_id) → bool` | Cancel active session |
-| `health_check() → bool` | Check if Hermes API is alive |
+| `send_message(text, session_id=None) → HermesResponse` | `POST /v1/chat/completions` (non-streaming) with `X-Hermes-Session-Id` |
+| `stream_message(text, session_id=None) → AsyncIterator[str]` | `POST /v1/chat/completions` with `stream: true`, yields SSE `data:` lines |
+| `start_run(text) → str` | `POST /v1/runs` → returns `run_id` for async execution |
+| `get_run_status(run_id) → RunStatus` | `GET /v1/runs/{run_id}` |
+| `stream_run_events(run_id) → AsyncIterator[Event]` | `GET /v1/runs/{run_id}/events` — SSE lifecycle events |
+| `cancel_run(run_id) → bool` | `POST /v1/runs/{run_id}/stop` |
+| `health_check() → bool` | `GET /health` |
 
 **Implementation:** `httpx.AsyncClient` with connection pooling, retries, and timeout config.
 
-**Hermes API Server endpoints** (from Hermes docs):
-- `POST /chat` — send message with optional session
-- `GET /chat/stream` — SSE streaming endpoint
-- `DELETE /session/{id}` — cancel session
+**Hermes API Server endpoints** (OpenAI-compatible, default `http://localhost:8642`):
+- `POST /v1/chat/completions` — OpenAI Chat Completions format (stateless; session continuity via `X-Hermes-Session-Id` header; supports `stream: true` for SSE)
+- `POST /v1/responses` — OpenAI Responses API format (stateful via `previous_response_id`)
+- `POST /v1/runs` — async: start a run, returns `run_id` immediately (HTTP 202)
+- `GET /v1/runs/{run_id}` — retrieve run status
+- `GET /v1/runs/{run_id}/events` — SSE stream of structured lifecycle events
+- `POST /v1/runs/{run_id}/stop` — interrupt a running agent
 - `GET /health` — health check
+
+**Primary integration path:** `POST /v1/chat/completions` with `stream: true` + `X-Hermes-Session-Id` header for session continuity. This provides both synchronous and streaming modes through a single endpoint.
 
 ### 3.3 TaskManager
 
@@ -202,7 +210,7 @@ agent:
       tags: ["chat", "assistant"]
 
 hermes:
-  api_url: "http://localhost:18080"   # Hermes API Server
+  api_url: "http://localhost:8642"     # Hermes API Server (OpenAI-compatible)
   timeout: 300
   default_profile: null               # optional: Hermes profile to use
 
