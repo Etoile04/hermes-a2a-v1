@@ -391,10 +391,18 @@ hermes-a2a-v1/
 │       ├── hermes_client.py      # Hermes API async client
 │       ├── task_manager.py       # Task state machine + context
 │       ├── task_store.py         # BaseTaskStore + SQLite + Redis impls
+│       ├── tenant_manager.py     # Multi-tenant routing + config
 │       ├── config.py             # YAML config loader + validator
 │       ├── auth.py               # Authentication service
 │       ├── agent_card.py         # Agent Card builder from config
-│       └── models.py             # Pydantic models for internal types
+│       ├── models.py             # Pydantic models for internal types
+│       └── dashboard/
+│           ├── __init__.py
+│           ├── routes.py         # Dashboard FastAPI router + API endpoints
+│           └── static/
+│               ├── index.html    # Main dashboard SPA (HTMX + Tailwind)
+│               ├── style.css
+│               └── app.js
 ├── tests/
 │   ├── conftest.py               # shared fixtures
 │   ├── test_task_manager.py
@@ -403,6 +411,8 @@ hermes-a2a-v1/
 │   ├── test_auth.py
 │   ├── test_config.py
 │   ├── test_handler.py
+│   ├── test_tenant_manager.py
+│   ├── test_dashboard.py
 │   └── test_integration.py
 └── docs/
     ├── superpowers/
@@ -412,23 +422,171 @@ hermes-a2a-v1/
     └── deployment.md
 ```
 
-## 10. Non-Goals (YAGNI)
+## 10. Admin Dashboard
 
-These are explicitly out of scope for v1.0:
+### 10.1 Overview
+
+Built-in lightweight web dashboard for monitoring and managing the A2A gateway. Served as static HTML from the same FastAPI instance.
+
+**Access:** `http://localhost:18800/dashboard/`
+
+### 10.2 Dashboard Pages
+
+| Page | Path | Content |
+|------|------|---------|
+| **Overview** | `/dashboard/` | Gateway uptime, active tasks, total tasks, agent health status |
+| **Tasks** | `/dashboard/tasks` | Task list with filters (status, date range, agent), click to view details |
+| **Task Detail** | `/dashboard/tasks/{id}` | Full message history, state transitions timeline, artifacts |
+| **Agents** | `/dashboard/agents` | Registered agents list, health, per-agent task stats |
+| **Config** | `/dashboard/config` | Current config view (secrets masked), agent card preview |
+
+### 10.3 Technology
+
+- **Frontend:** Single-page HTML with HTMX + Tailwind CSS (no build step, no npm)
+- **Backend API:** FastAPI endpoints under `/dashboard/api/` returning JSON
+- **Real-time:** SSE endpoint for live task updates on overview page
+- **Authentication:** Same auth as A2A endpoints (Bearer Token)
+
+### 10.4 Dashboard API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /dashboard/api/stats` | Aggregate stats: active tasks, completed, failed, uptime |
+| `GET /dashboard/api/tasks?page=&status=&agent=` | Paginated task list with filters |
+| `GET /dashboard/api/tasks/{id}` | Task detail with full history |
+| `GET /dashboard/api/agents` | Agent list with health status |
+| `GET /dashboard/api/agents/{name}` | Agent detail with task stats |
+| `GET /dashboard/api/events` | SSE stream of task state changes (live updates) |
+
+### 10.5 File Structure Addition
+
+```
+src/hermes_a2a/
+├── dashboard/
+│   ├── __init__.py
+│   ├── routes.py          # Dashboard FastAPI router
+│   ├── static/
+│   │   ├── index.html      # Main dashboard SPA
+│   │   ├── style.css       # Tailwind via CDN + custom
+│   │   └── app.js          # HTMX-based dashboard logic
+│   └── templates/          # (if needed for server-rendered pages)
+```
+
+## 11. Multi-Tenant Agent Hosting
+
+### 11.1 Overview
+
+Support multiple Hermes Agent instances through a single gateway endpoint. Each "tenant" maps to a specific Hermes Agent with its own config, model, and profile.
+
+### 11.2 Architecture
+
+```
+Remote Agent A ─┐                          ┌──► Hermes Agent 1 (profile: coder, model: claude)
+                │                          │
+Remote Agent B ─┼──► hermes-a2a-v1 ───────►├──► Hermes Agent 2 (profile: writer, model: gpt-4o)
+                │    (multi-tenant)        │
+Remote Agent C ─┘                          └──► Hermes Agent 3 (profile: analyst, model: gemini)
+```
+
+### 11.3 Tenant Routing
+
+**Routing strategy:** URL path-based routing.
+
+```
+POST /a2a/{tenant_id}/jsonrpc          # JSON-RPC endpoint per tenant
+GET  /a2a/{tenant_id}/agent-card.json  # Agent Card per tenant
+GET  /a2a/{tenant_id}/...              # All A2A endpoints under tenant namespace
+```
+
+**Default tenant:** Requests to `/a2a/jsonrpc` (without tenant_id) route to the `default` tenant.
+
+### 11.4 Tenant Configuration
+
+```yaml
+tenants:
+  default:
+    hermes_api_url: "http://localhost:8642"
+    agent:
+      name: "hermes-default"
+      description: "General purpose Hermes Agent"
+    skills:
+      - id: "general"
+        name: "General Chat"
+        description: "General purpose assistant"
+
+  coder:
+    hermes_api_url: "http://localhost:8643"
+    agent:
+      name: "hermes-coder"
+      description: "Code-specialized Hermes Agent"
+    skills:
+      - id: "coding"
+        name: "Code Assistant"
+        description: "Software development assistant"
+
+  writer:
+    hermes_api_url: "http://localhost:8644"
+    agent:
+      name: "hermes-writer"
+      description: "Writing-specialized Hermes Agent"
+    skills:
+      - id: "writing"
+        name: "Writing Assistant"
+        description: "Content creation assistant"
+```
+
+### 11.5 Tenant Isolation
+
+- **Task isolation:** Each tenant's tasks are stored with tenant prefix: `a2a:{tenant}:task:{task_id}`
+- **Auth isolation:** Each tenant can have its own auth tokens
+- **Agent Card isolation:** Each tenant exposes its own `/.well-known/agent-card.json` variant
+- **Rate limiting:** Per-tenant rate limits (configurable)
+
+### 11.6 TenantManager Component
+
+```python
+class TenantManager:
+    """Manages multi-tenant routing and lifecycle."""
+
+    async def get_tenant(self, tenant_id: str) -> TenantConfig
+    async def list_tenants(self) -> list[TenantSummary]
+    async def get_agent_card(self, tenant_id: str) -> AgentCard
+    async def health_check(self, tenant_id: str) -> TenantHealth
+    async def health_check_all(self) -> dict[str, TenantHealth]
+```
+
+### 11.7 File Structure Addition
+
+```
+src/hermes_a2a/
+├── tenant_manager.py      # Tenant routing + config
+```
+
+### 11.8 Dashboard Multi-Tenant Support
+
+The dashboard automatically reflects multi-tenant setup:
+- **Overview page:** Shows per-tenant stats side by side
+- **Agents page:** Lists all tenants with individual health status
+- **Task filters:** Dropdown to filter by tenant
+- **Config page:** Shows all tenant configs (secrets masked)
+
+## 12. Non-Goals (YAGNI)
+
+These remain out of scope for v1.0:
 
 - ❌ Agent-to-Agent orchestration (this is a gateway, not an orchestrator)
 - ❌ Built-in LLM inference (delegated to Hermes Agent)
 - ❌ gRPC protocol binding (JSON-RPC/SSE only for v1.0)
 - ❌ Webhook push notifications (polling + streaming only)
-- ❌ Admin UI / dashboard
-- ❌ Multi-tenant agent hosting (single agent per gateway instance)
 
-## 11. Success Criteria
+## 13. Success Criteria
 
 1. **A2A v1.0 Compliance** — Passes official A2A conformance tests
 2. **Multi-turn** — Consecutive messages maintain conversation context via Hermes session
 3. **Streaming** — Token-by-token SSE streaming from Hermes to remote agent
 4. **Async** — Non-blocking: `SendMessage` returns immediately, results via polling or streaming
 5. **Multi-instance** — Two instances behind load balancer can share task state via Redis
-6. **Test Coverage** — >90% code coverage, all tests passing
-7. **Docker** — One-command deployment: `docker-compose up`
+6. **Admin Dashboard** — Built-in web UI showing task status, agent health, message history
+7. **Multi-tenant** — Single gateway routes requests to multiple Hermes Agent instances by URL path
+8. **Test Coverage** — >90% code coverage, all tests passing
+9. **Docker** — One-command deployment: `docker-compose up`
