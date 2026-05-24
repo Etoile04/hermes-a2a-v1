@@ -33,6 +33,7 @@ def mock_hermes():
     """Mock HermesClient that returns canned responses."""
     client = AsyncMock()
     client.send_message.return_value = ("Hello from Hermes!", "sess-001")
+    client.health_check.return_value = True
 
     async def _stream(*a, **kw):
         for chunk in ["Hello", " from", " Hermes!"]:
@@ -59,7 +60,16 @@ def app_client(mock_hermes):
 def test_health_endpoint(app_client):
     resp = app_client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["hermes_api"]["reachable"] is True
+    assert "latency_ms" in data["hermes_api"]
+    assert isinstance(data["hermes_api"]["latency_ms"], (int, float))
+    assert data["task_store"]["type"] == "sqlite"
+    assert "db_path" in data["task_store"]
+    assert "active" in data["sessions"]
+    assert "uptime_seconds" in data
+    assert data["version"] == "0.1.0"
 
 
 # ------------------------------------------------------------------

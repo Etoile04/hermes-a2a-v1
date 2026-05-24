@@ -1,40 +1,34 @@
 import pytest
-from hermes_a2a.task_store import SQLiteTaskStore
 
-@pytest.fixture
-async def store(tmp_path):
-    s = SQLiteTaskStore(str(tmp_path / 'test.db'))
-    await s.init()
-    yield s
-    await s.close()
+# `task_store` fixture is provided by conftest.py
 
 @pytest.mark.asyncio
-async def test_save_and_get(store):
+async def test_save_and_get(task_store):
     task = {'id': 't1', 'status': {'state': 'WORKING'}}
-    await store.save(task, None)
-    result = await store.get('t1', None)
+    await task_store.save(task, None)
+    result = await task_store.get('t1', None)
     assert result is not None
     assert result['id'] == 't1'
 
 @pytest.mark.asyncio
-async def test_get_missing_returns_none(store):
-    assert await store.get('nonexistent', None) is None
+async def test_get_missing_returns_none(task_store):
+    assert await task_store.get('nonexistent', None) is None
 
 @pytest.mark.asyncio
-async def test_delete(store):
-    await store.save({'id': 't2', 'status': {'state': 'COMPLETED'}}, None)
-    await store.delete('t2', None)
-    assert await store.get('t2', None) is None
+async def test_delete(task_store):
+    await task_store.save({'id': 't2', 'status': {'state': 'COMPLETED'}}, None)
+    await task_store.delete('t2', None)
+    assert await task_store.get('t2', None) is None
 
 @pytest.mark.asyncio
-async def test_list(store):
+async def test_list(task_store):
     for i in range(5):
-        await store.save({'id': f't{i}', 'status': {'state': 'COMPLETED'}}, None)
-    assert len(await store.list(None, None)) == 5
+        await task_store.save({'id': f't{i}', 'status': {'state': 'COMPLETED'}}, None)
+    assert len(await task_store.list(None, None)) == 5
 
 @pytest.mark.asyncio
-async def test_save_updates_existing(store):
-    await store.save({'id': 't3', 'status': {'state': 'WORKING'}}, None)
-    await store.save({'id': 't3', 'status': {'state': 'COMPLETED'}}, None)
-    result = await store.get('t3', None)
+async def test_save_updates_existing(task_store):
+    await task_store.save({'id': 't3', 'status': {'state': 'WORKING'}}, None)
+    await task_store.save({'id': 't3', 'status': {'state': 'COMPLETED'}}, None)
+    result = await task_store.get('t3', None)
     assert result['status']['state'] == 'COMPLETED'

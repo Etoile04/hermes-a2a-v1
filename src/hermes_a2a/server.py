@@ -9,8 +9,10 @@ Wires together:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -29,9 +31,12 @@ from a2a.types.a2a_pb2 import (
 from hermes_a2a.a2a_handler import HermesA2AHandler
 from hermes_a2a.config import load_config
 from hermes_a2a.hermes_client import HermesClient
+from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_store import SQLiteTaskStore
 
 logger = logging.getLogger(__name__)
+
+VERSION = "0.1.0"
 
 
 # ------------------------------------------------------------------
@@ -51,7 +56,7 @@ def _build_agent_card(cfg: Any) -> AgentCard:
     return AgentCard(
         name=cfg.agent.name,
         description=cfg.agent.description,
-        version="0.1.0",
+        version=VERSION,
         capabilities=AgentCapabilities(
             streaming=True,
             push_notifications=False,
@@ -70,8 +75,8 @@ def _build_agent_card(cfg: Any) -> AgentCard:
 def _make_auth_middleware(token: str):
     """Return a Starlette middleware that checks Bearer token."""
     async def auth_middleware(request: Request, call_next):
-        # Allow unauthenticated access to agent card and health
-        if request.url.path in ("/.well-known/agent-card.json", "/health"):
+        # Allow unauthenticated access to agent card, health, and metrics
+        if request.url.path in ("/.well-known/agent-card.json", "/health", "/metrics"):
             return await call_next(request)
         auth_header = request.headers.get("authorization", "")
         if auth_header != f"Bearer {token}":
@@ -99,34 +104,64 @@ def create_app(config_path: str | None = None) -> FastAPI:
         api_key=cfg.hermes.api_key or None,
     )
     task_store = SQLiteTaskStore(cfg.task_store.path)
+    session_store = SessionStore(cfg.task_store.path)  # share same SQLite DB
 
-    handler = HermesA2AHandler(hermes_client, task_store)
+    handler = HermesA2AHandler(hermes_client, task_store, session_store)
     agent_card = _build_agent_card(cfg)
+
+    # Metrics counters (shared between handler and endpoints)
+    _metrics_counters = {
+        "requests_total": 0,
+        "errors_total": 0,
+    }
+    handler._metrics = _metrics_counters  # wire up metrics counter
 
     # Store references on the app state for external access (e.g. tests)
     app_state = {
         "hermes_client": hermes_client,
         "task_store": task_store,
+        "session_store": session_store,
         "handler": handler,
         "config": cfg,
+        "start_time": None,  # set in lifespan
+        "metrics": _metrics_counters,
     }
 
     # -- lifespan (init/cleanup async resources) ---------------------
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        app_state["start_time"] = time.time()
         await task_store.init()
-        logger.info(
-            "Hermes A2A Gateway started — agent=%r, hermes=%s",
-            cfg.agent.name,
-            cfg.hermes.api_url,
-        )
+        await session_store.init()
+        await handler.restore_sessions()
+        # Clean up stale sessions on startup
+        deleted = await session_store.cleanup(max_age_hours=24)
+        if deleted:
+            logger.info("Cleaned up %d stale sessions", deleted)
+
+        # Log startup configuration (hide sensitive fields)
+        safe_cfg = {
+            "server": {"host": cfg.server.host, "port": cfg.server.port},
+            "hermes": {
+                "api_url": cfg.hermes.api_url,
+                "timeout": cfg.hermes.timeout,
+                "api_key": "***" if cfg.hermes.api_key else "(none)",
+            },
+            "agent": {"name": cfg.agent.name, "description": cfg.agent.description},
+            "auth": {"enabled": cfg.auth.enabled, "token": "***" if cfg.auth.token else "(none)"},
+            "task_store": {"type": cfg.task_store.type, "path": cfg.task_store.path},
+            "logging_level": cfg.logging_level,
+            "version": VERSION,
+        }
+        logger.info("Hermes A2A Gateway starting — config=%s", json.dumps(safe_cfg))
         yield
+        await session_store.close()
         await task_store.close()
         logger.info("Hermes A2A Gateway shut down")
 
     app = FastAPI(
         title="Hermes A2A Gateway",
-        version="0.1.0",
+        version=VERSION,
         lifespan=lifespan,
     )
 
@@ -153,15 +188,67 @@ def create_app(config_path: str | None = None) -> FastAPI:
     rpc_routes = create_jsonrpc_routes(
         request_handler=handler,
         rpc_url="/",
+        enable_v0_3_compat=True,
     )
 
-    # Health check
+    # Health check (enhanced)
     async def health(request: Request):
-        return Response(content='{"status":"ok"}', media_type="application/json")
+        gw = request.app.state.gateway
+        hermes_client: HermesClient = gw["hermes_client"]
+
+        # Check Hermes API reachability with latency measurement
+        t0 = time.monotonic()
+        try:
+            reachable = await hermes_client.health_check()
+        except Exception:
+            reachable = False
+        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+
+        status = "ok" if reachable else "degraded"
+
+        # Calculate uptime
+        start = gw.get("start_time")
+        uptime_seconds = round(time.time() - start, 1) if start else 0
+
+        # Active sessions count
+        handler_ref: HermesA2AHandler = gw["handler"]
+        active_sessions = len(handler_ref._sessions)
+
+        result = {
+            "status": status,
+            "hermes_api": {
+                "reachable": reachable,
+                "latency_ms": latency_ms,
+            },
+            "task_store": {
+                "type": cfg.task_store.type,
+                "db_path": cfg.task_store.path,
+            },
+            "sessions": {
+                "active": active_sessions,
+            },
+            "uptime_seconds": uptime_seconds,
+            "version": VERSION,
+        }
+        return Response(content=json.dumps(result), media_type="application/json")
+
+    # Metrics endpoint
+    async def metrics(request: Request):
+        gw = request.app.state.gateway
+        m = gw["metrics"]
+        handler_ref: HermesA2AHandler = gw["handler"]
+        result = {
+            "requests_total": m["requests_total"],
+            "errors_total": m["errors_total"],
+            "active_tasks": len(await gw["task_store"].list()),
+            "sessions_active": len(handler_ref._sessions),
+        }
+        return Response(content=json.dumps(result), media_type="application/json")
 
     app.routes.extend(card_routes)
     app.routes.extend(rpc_routes)
     app.routes.append(Route("/health", health, methods=["GET"]))
+    app.routes.append(Route("/metrics", metrics, methods=["GET"]))
 
     return app
 
