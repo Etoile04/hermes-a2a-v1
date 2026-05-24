@@ -86,6 +86,9 @@ def _make_auth_middleware(token: str):
 
 def create_app(config_path: str | None = None) -> FastAPI:
     """Build and return the FastAPI application."""
+    # Fallback to env var when called as uvicorn factory (no args)
+    if config_path is None:
+        config_path = os.environ.get("HERMES_A2A_CONFIG")
     cfg = load_config(config_path)
     logging.basicConfig(level=getattr(logging, cfg.logging_level, logging.INFO))
 
@@ -93,6 +96,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
     hermes_client = HermesClient(
         base_url=cfg.hermes.api_url,
         timeout=cfg.hermes.timeout,
+        api_key=cfg.hermes.api_key or None,
     )
     task_store = SQLiteTaskStore(cfg.task_store.path)
 

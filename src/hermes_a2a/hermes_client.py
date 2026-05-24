@@ -12,9 +12,10 @@ import httpx
 class HermesClient:
     """Async client that talks to a Hermes API Server over OpenAI-compatible endpoints."""
 
-    def __init__(self, base_url: str = "http://localhost:8642", timeout: int = 300) -> None:
+    def __init__(self, base_url: str = "http://localhost:8642", timeout: int = 300, api_key: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_key = api_key
 
     # ------------------------------------------------------------------
     # Non-streaming
@@ -29,6 +30,8 @@ class HermesClient:
         a new UUID is generated.
         """
         headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if session_id is not None:
             headers["X-Hermes-Session-Id"] = session_id
 
@@ -67,6 +70,8 @@ class HermesClient:
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         if session_id is not None:
             headers["X-Hermes-Session-Id"] = session_id
 

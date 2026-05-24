@@ -16,6 +16,7 @@ class HermesConfig(BaseModel):
     """Hermes Agent API connection settings."""
 
     api_url: str = "http://localhost:8642"
+    api_key: str = ""
     timeout: int = 300
 
 
