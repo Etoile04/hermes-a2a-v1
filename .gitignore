@@ -9,5 +9,6 @@ build/
 venv/
 *.db
 .env
-config.yaml
+config*.yaml
+!config.example.yaml
 !.gitignore
