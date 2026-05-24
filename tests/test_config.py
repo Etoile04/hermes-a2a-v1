@@ -124,10 +124,10 @@ class TestConfigValidation:
         with pytest.raises(Exception):
             HermesConfig(api_url="http://localhost:8642", timeout="bad")
 
-    def test_missing_required_nested_model(self):
-        """GatewayConfig requires server, hermes, agent, auth, task_store."""
+    def test_invalid_nested_field(self):
+        """Passing an invalid type to a nested model should raise."""
         with pytest.raises(Exception):
-            GatewayConfig()
+            GatewayConfig(server="not_a_dict_or_model")
 
     def test_negative_port(self):
         """Pydantic will accept negative int; this just verifies construction works."""
