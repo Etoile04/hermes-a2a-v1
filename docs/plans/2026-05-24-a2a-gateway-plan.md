@@ -867,11 +867,11 @@ agent:
   url: "http://<tailscale-ip-a>:18800"
 ```
 
-Machine B (Linux, 100.70.30.21):
+Machine B (Linux, `<MACHINE_B_TAILSCALE_IP>`):
 ```yaml
 agent:
   name: "Hermes Agent - Linux (B)"
-  url: "http://100.70.30.21:18800"
+  url: "http://<MACHINE_B_TAILSCALE_IP>:18800"
 ```
 
 ### Task 2.2: Write deployment script
@@ -885,7 +885,7 @@ scripts/deploy.sh <tailscale-ip> <config-path>
 
 ```bash
 # From Machine A, send message to Machine B via A2A
-curl -X POST http://100.70.30.21:18800/a2a/jsonrpc \
+curl -X POST http://<MACHINE_B_TAILSCALE_IP>:18800/a2a/jsonrpc \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -944,3 +944,46 @@ async def discover_and_send(agent_url: str, message: str):
 - [ ] Machine B sends message to Machine A → receives response
 - [ ] Multi-turn conversation works (contextId preserved)
 - [ ] Both sides log the interaction in TaskStore
+
+---
+
+## 附录：网络配置指南
+
+两台机器通过 **Tailscale VPN** 私有网络互联。部署前需获取并配置双方的 Tailscale IP。
+
+### 获取 Tailscale IP
+
+```bash
+tailscale ip -4
+# 在每台机器上运行，记录输出（100.x.x.x 格式）
+```
+
+### 变量说明
+
+| 变量名 | 含义 | 示例 |
+|--------|------|------|
+| `<MACHINE_A_TAILSCALE_IP>` | Machine A（macOS，运行 Hermes）的 IP | `100.x.x.x` |
+| `<MACHINE_B_TAILSCALE_IP>` | Machine B（Linux，远程 A2A Gateway）的 IP | `100.x.x.x` |
+
+### 验证互通
+
+```bash
+# Machine A → Machine B
+ping -c 3 <MACHINE_B_TAILSCALE_IP>
+```
+
+### 配置填写
+
+将获取的 IP 替换 config.yaml 和文档中所有 `<MACHINE_x_TAILSCALE_IP>` 占位符：
+
+```yaml
+# Machine B 的 config.yaml
+hermes:
+  api_url: "http://<MACHINE_A_TAILSCALE_IP>:8642"
+  api_key: "从 Machine A 的 ~/.hermes/.env 中获取 API_SERVER_KEY 的值"
+
+agent:
+  url: "http://<MACHINE_B_TAILSCALE_IP>:18800"
+```
+
+> 详细步骤见 `docs/specs/2026-05-24-a2a-gateway-design.md` 的「附录：网络配置指南」章节。

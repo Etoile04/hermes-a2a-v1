@@ -10,7 +10,7 @@
 
 Build a production-grade A2A v1.0 protocol gateway (`hermes-a2a-v1`) that enables two Hermes Agent instances (macOS + Linux over Tailscale) to discover each other, exchange tasks, and collaborate — using the standard A2A protocol backed by the official `a2a-sdk` Python library.
 
-**Acceptance criteria:** User can send a message from Hermes Agent A (macOS, 192.168.3.200 / Tailscale) to Hermes Agent B (Linux, 100.70.30.21) via A2A, receive a response, and verify both sides log the interaction.
+**Acceptance criteria:** User can send a message from Hermes Agent A (macOS) to Hermes Agent B (Linux) via A2A, receive a response, and verify both sides log the interaction.
 
 ---
 
@@ -33,7 +33,7 @@ Build a production-grade A2A v1.0 protocol gateway (`hermes-a2a-v1`) that enable
                     A2A v1.0 JSON-RPC
                             │
 ┌─────────────────────────────────────────────────────────┐
-│ Machine B (Linux, 100.70.30.21)                         │
+│ Machine B (Linux, <MACHINE_B_TAILSCALE_IP>)                  │
 │                                                         │
 │  hermes-a2a-v1 (:18800) ──► Hermes API Server (:8642)   │
 │     └── Same architecture as Machine A                  │
@@ -227,7 +227,9 @@ logging:
 - Port 8642 for Hermes API Server (must be enabled)
 - Tailscale IP for cross-machine access
 
-### Machine B (Linux, 100.70.30.21)
+### Machine B (Linux)
+
+> **如何获取 IP：** 见下方 [附录：网络配置指南](#附录网络配置指南)
 - Same setup as Machine A
 - Configure Machine A as peer
 
@@ -256,3 +258,107 @@ logging:
 - OAuth2/mTLS auth (Bearer token only for now)
 - Push notifications
 - Docker packaging
+
+---
+
+## 附录：网络配置指南
+
+本项目的两台机器通过 **Tailscale VPN** 私有网络互联。部署前需获取并配置双方的 Tailscale IP。
+
+### 1. 安装 Tailscale
+
+如果尚未安装，在每台机器上：
+
+```bash
+# macOS
+brew install tailscale
+sudo tailscale up
+
+# Ubuntu / Debian
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+安装后用浏览器完成登录认证。
+
+### 2. 获取本机 Tailscale IP
+
+在每台机器上运行：
+
+```bash
+tailscale ip -4
+# 输出示例：100.x.x.x
+```
+
+记下两台机器的 IP，下文称：
+
+| 角色 | 变量名 | 说明 |
+|------|--------|------|
+| Machine A（macOS） | `<MACHINE_A_TAILSCALE_IP>` | 运行 Hermes Gateway + API Server |
+| Machine B（Linux） | `<MACHINE_B_TAILSCALE_IP>` | 运行远程 A2A Gateway |
+
+### 3. 验证网络互通
+
+在 Machine A 上 ping Machine B：
+
+```bash
+ping -c 3 <MACHINE_B_TAILSCALE_IP>
+```
+
+应看到正常延迟回复。如果不通，检查：
+- 两台机器是否登录了同一个 Tailscale 账户
+- Tailscale 是否处于 `active` 状态：`tailscale status`
+
+### 4. 配置 config.yaml
+
+**Machine B（远程）的 `config.yaml`**——`hermes.api_url` 指向 Machine A 的 API Server：
+
+```yaml
+hermes:
+  api_url: "http://<MACHINE_A_TAILSCALE_IP>:8642"   # 例：http://100.x.x.x:8642
+  api_key: "你的 API_SERVER_KEY"                      # 从 Machine A 的 .env 获取
+  timeout: 300
+
+agent:
+  url: "http://<MACHINE_B_TAILSCALE_IP>:18800"       # 例：http://100.x.x.x:18800
+```
+
+**Machine A 的 `config.yaml`**（如需双向通讯）：
+
+```yaml
+hermes:
+  api_url: "http://localhost:8642"
+  timeout: 300
+
+agent:
+  url: "http://<MACHINE_A_TAILSCALE_IP>:18800"
+```
+
+### 5. 获取 API Server Key
+
+Machine A 的 Hermes API Server 如果绑定 `0.0.0.0`，需要 Bearer token 认证。
+
+查看 `.env` 文件中的 key：
+
+```bash
+grep API_SERVER_KEY ~/.hermes/.env
+# API_SERVER_KEY=xxxxxxxxxxxxxxxx
+```
+
+将该值填入 Machine B 的 `config.yaml` 中 `hermes.api_key` 字段。
+
+### 6. 启动顺序
+
+```bash
+# 1. Machine A: 确保 Hermes Gateway 运行且 API Server 在 0.0.0.0:8642 上线
+curl http://localhost:8642/health
+# {"status":"ok"}
+
+# 2. Machine B: 启动 A2A Gateway
+cd ~/projects/hermes-a2a-v1
+A2A_CONFIG=config.yaml python3.11 -m uvicorn hermes_a2a.server:create_app --factory --host 0.0.0.0 --port 18800
+
+# 3. Machine A: 验证跨机器连通
+curl http://<MACHINE_B_TAILSCALE_IP>:18800/health
+curl http://<MACHINE_B_TAILSCALE_IP>:18800/.well-known/agent-card.json
+```
