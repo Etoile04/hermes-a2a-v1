@@ -1,0 +1,35 @@
+[project]
+name = "hermes-a2a-v1"
+version = "0.1.0"
+description = "A2A v1.0 protocol gateway for Hermes Agent"
+requires-python = ">=3.10"
+dependencies = [
+    "a2a-sdk>=1.0.3",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "httpx>=0.28.0",
+    "sse-starlette>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.22",
+]
+
+[project.scripts]
+hermes-a2a = "hermes_a2a.server:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

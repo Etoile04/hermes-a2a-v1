@@ -1,0 +1,30 @@
+# Hermes A2A v1 Gateway — Example Configuration
+# Copy to config.yaml and customize for your setup.
+
+server:
+  host: "0.0.0.0"
+  port: 18800
+
+hermes:
+  api_url: "http://localhost:8642"
+  timeout: 300
+
+agent:
+  name: "Hermes Agent"
+  description: "AI Agent powered by Hermes via A2A v1.0"
+  url: "http://localhost:18800"
+  skills:
+    - id: general
+      name: General Q&A
+      description: General question answering and conversation
+
+auth:
+  enabled: false
+  token: ""  # Generate with: openssl rand -hex 24
+
+task_store:
+  type: sqlite
+  path: "~/.hermes/a2a-gateway/tasks.db"
+
+logging:
+  level: INFO
