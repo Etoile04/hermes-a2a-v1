@@ -31,6 +31,7 @@ from a2a.types.a2a_pb2 import (
 )
 
 from hermes_a2a.hermes_client import HermesClient
+from hermes_a2a.message_parser import MessageParser
 from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_state_machine import TaskStateMachine
 from hermes_a2a.task_store import SQLiteTaskStore
@@ -79,6 +80,7 @@ class HermesA2AHandler(RequestHandler):
         self._store = task_store
         self._session_store = session_store
         self._state_machine = TaskStateMachine()
+        self._message_parser = MessageParser()
         # context_id → hermes session_id mapping for multi-turn
         # If session_store is provided, it will be used instead of this dict
         self._sessions: dict[str, str] = {}
@@ -107,9 +109,8 @@ class HermesA2AHandler(RequestHandler):
     # ------------------------------------------------------------------
 
     def _extract_text(self, params: SendMessageRequest) -> str:
-        """Extract user text from a SendMessageRequest proto."""
-        parts = list(params.message.parts)
-        return "".join(p.text for p in parts if p.text)
+        """Extract text from multi-part message using MessageParser."""
+        return self._message_parser.extract_text_for_hermes(params)
 
     def _context_id(self, params: SendMessageRequest) -> str:
         """Get or create a contextId for the conversation."""
