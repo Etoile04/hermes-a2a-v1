@@ -33,6 +33,7 @@ from a2a.types.a2a_pb2 import (
 )
 
 from hermes_a2a.a2a_handler import HermesA2AHandler
+from hermes_a2a.admin_api import create_admin_routes
 from hermes_a2a.config import load_config
 from hermes_a2a.hermes_client import HermesClient
 from hermes_a2a.peer_manager import PeerManager
@@ -102,12 +103,25 @@ def _build_agent_card(cfg: Any) -> AgentCard:
 # Auth middleware (optional)
 # ------------------------------------------------------------------
 
-def _make_auth_middleware(token: str):
-    """Return a Starlette middleware that checks Bearer token."""
+def _make_auth_middleware(token: str, admin_token: str = ""):
+    """Return a Starlette middleware that checks Bearer token.
+    
+    For /admin/* paths, uses admin_token (falls back to token).
+    """
+    effective_admin_token = admin_token or token
+
     async def auth_middleware(request: Request, call_next):
         # Allow unauthenticated access to agent card, health, and metrics
         if request.url.path in ("/.well-known/agent-card.json", "/health", "/metrics"):
             return await call_next(request)
+        
+        # Admin routes use admin_token
+        if request.url.path.startswith("/admin"):
+            auth_header = request.headers.get("authorization", "")
+            if auth_header != f"Bearer {effective_admin_token}":
+                return Response(status_code=401, content="Unauthorized")
+            return await call_next(request)
+        
         auth_header = request.headers.get("authorization", "")
         if auth_header != f"Bearer {token}":
             return Response(status_code=401, content="Unauthorized")
@@ -220,7 +234,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     # Auth middleware (after CORS)
     if cfg.auth.enabled and cfg.auth.token:
-        app.add_middleware(BaseHTTPMiddleware, dispatch=_make_auth_middleware(cfg.auth.token))
+        app.add_middleware(BaseHTTPMiddleware, dispatch=_make_auth_middleware(cfg.auth.token, cfg.auth.admin_token))
 
     # -- A2A routes --------------------------------------------------
     # Agent card at /.well-known/agent-card.json
@@ -337,6 +351,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.routes.extend(card_routes)
     app.routes.extend(rpc_routes)
     app.routes.extend(peer_routes)  # custom routes before REST catch-all
+    app.routes.extend(create_admin_routes())  # admin routes before REST catch-all
     app.routes.extend(rest_routes)
     app.routes.append(Route("/health", health, methods=["GET"]))
     app.routes.append(Route("/metrics", metrics, methods=["GET"]))

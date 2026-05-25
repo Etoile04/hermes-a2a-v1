@@ -51,6 +51,7 @@ class AuthConfig(BaseModel):
 
     enabled: bool = True
     token: str = ""
+    admin_token: str = ""  # Falls back to token when empty
 
 
 class RateLimitConfig(BaseModel):
