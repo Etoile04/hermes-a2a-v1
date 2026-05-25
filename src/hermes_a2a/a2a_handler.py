@@ -32,6 +32,7 @@ from a2a.types.a2a_pb2 import (
 
 from hermes_a2a.hermes_client import HermesClient
 from hermes_a2a.session_store import SessionStore
+from hermes_a2a.task_state_machine import TaskStateMachine
 from hermes_a2a.task_store import SQLiteTaskStore
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class HermesA2AHandler(RequestHandler):
         self._hermes = hermes_client
         self._store = task_store
         self._session_store = session_store
+        self._state_machine = TaskStateMachine()
         # context_id → hermes session_id mapping for multi-turn
         # If session_store is provided, it will be used instead of this dict
         self._sessions: dict[str, str] = {}
@@ -285,6 +287,18 @@ class HermesA2AHandler(RequestHandler):
         task_dict = await self._store.get(params.id, context)
         if task_dict is None:
             return None
+
+        # Validate current state is cancelable
+        current_state_str = task_dict.get("status", {}).get("state", "")
+        current_state = TaskStateMachine.state_from_str(current_state_str)
+
+        if self._state_machine.is_terminal(current_state):
+            logger.warning(
+                "Cannot cancel task %s in terminal state '%s'",
+                params.id, current_state_str,
+            )
+            return None
+
         task_dict["status"]["state"] = "canceled"
         await self._store.save(task_dict, context)
         return _make_task(
