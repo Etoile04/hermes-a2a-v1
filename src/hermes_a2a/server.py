@@ -36,6 +36,7 @@ from hermes_a2a.a2a_handler import HermesA2AHandler
 from hermes_a2a.config import load_config
 from hermes_a2a.hermes_client import HermesClient
 from hermes_a2a.peer_manager import PeerManager
+from hermes_a2a.rate_limiter import TokenBucketRateLimiter
 from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_store import SQLiteTaskStore
 
@@ -201,13 +202,21 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # Expose state
     app.state.gateway = app_state
 
-    # CORS
+    # CORS (configurable origins)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cfg.cors.origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Rate limiting middleware (before auth so unauthenticated requests are also limited)
+    if cfg.rate_limit.enabled:
+        app.add_middleware(
+            TokenBucketRateLimiter,
+            requests_per_minute=cfg.rate_limit.requests_per_minute,
+            burst_size=cfg.rate_limit.burst_size,
+        )
 
     # Auth middleware (after CORS)
     if cfg.auth.enabled and cfg.auth.token:
