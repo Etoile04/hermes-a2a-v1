@@ -28,12 +28,21 @@ class AgentSkillConfig(BaseModel):
     description: str = ""
 
 
+class AgentProviderConfig(BaseModel):
+    """Agent provider information."""
+
+    organization: str = "Hermes"
+    url: str = "https://github.com/Etoile04/hermes-a2a-v1"
+
+
 class AgentConfig(BaseModel):
     """Agent identity and capabilities."""
 
     name: str = "Hermes Agent"
     description: str = "AI Agent powered by Hermes via A2A v1.0"
     url: str = "http://localhost:18800"
+    documentation_url: str = "https://github.com/Etoile04/hermes-a2a-v1/blob/main/README.md"
+    provider: AgentProviderConfig = Field(default_factory=AgentProviderConfig)
     skills: list[AgentSkillConfig] = Field(default_factory=list)
 
 

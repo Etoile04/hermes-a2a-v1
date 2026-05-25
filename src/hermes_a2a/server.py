@@ -25,7 +25,11 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.types.a2a_pb2 import (
     AgentCapabilities,
     AgentCard,
+    AgentProvider,
     AgentSkill,
+    HTTPAuthSecurityScheme,
+    SecurityRequirement,
+    SecurityScheme,
 )
 
 from hermes_a2a.a2a_handler import HermesA2AHandler
@@ -53,10 +57,30 @@ def _build_agent_card(cfg: Any) -> AgentCard:
             AgentSkill(id="general", name="General Q&A", description="General conversation")
         )
 
-    return AgentCard(
+    # Build provider
+    provider = AgentProvider(
+        organization=cfg.agent.provider.organization,
+        url=cfg.agent.provider.url,
+    )
+
+    # Build security schemes
+    bearer_auth = HTTPAuthSecurityScheme(
+        scheme="bearer",
+        description="Bearer token authentication",
+    )
+    security_scheme = SecurityScheme()
+    security_scheme.http_auth_security_scheme.CopyFrom(bearer_auth)
+
+    # Build security requirement
+    security_requirement = SecurityRequirement()
+    security_requirement.schemes["bearer"].list.append("bearer")
+
+    card = AgentCard(
         name=cfg.agent.name,
         description=cfg.agent.description,
+        provider=provider,
         version=VERSION,
+        documentation_url=cfg.agent.documentation_url,
         capabilities=AgentCapabilities(
             streaming=True,
             push_notifications=False,
@@ -66,6 +90,10 @@ def _build_agent_card(cfg: Any) -> AgentCard:
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
     )
+    card.security_schemes["bearer"].CopyFrom(security_scheme)
+    card.security_requirements.append(security_requirement)
+
+    return card
 
 
 # ------------------------------------------------------------------
