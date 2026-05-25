@@ -6,6 +6,7 @@ complexity and directly routes A2A requests to the Hermes API Server.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -32,6 +33,7 @@ from a2a.types.a2a_pb2 import (
 
 from hermes_a2a.hermes_client import HermesClient
 from hermes_a2a.message_parser import MessageParser
+from hermes_a2a.push_notifier import PushNotificationStore, PushNotifier
 from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_state_machine import TaskStateMachine
 from hermes_a2a.task_store import SQLiteTaskStore
@@ -75,10 +77,14 @@ class HermesA2AHandler(RequestHandler):
         hermes_client: HermesClient,
         task_store: SQLiteTaskStore,
         session_store: SessionStore | None = None,
+        push_store: PushNotificationStore | None = None,
+        push_notifier: PushNotifier | None = None,
     ) -> None:
         self._hermes = hermes_client
         self._store = task_store
         self._session_store = session_store
+        self._push_store = push_store or PushNotificationStore()
+        self._push_notifier = push_notifier or PushNotifier(self._push_store)
         self._state_machine = TaskStateMachine()
         self._message_parser = MessageParser()
         # context_id → hermes session_id mapping for multi-turn
@@ -178,6 +184,10 @@ class HermesA2AHandler(RequestHandler):
             duration_ms, task_id, context_id,
         )
         self._increment_metric("requests_total")
+
+        # Fire-and-forget push notification
+        await self._push_notifier.deliver(task_id, "completed", response_text)
+
         return task
 
     # ------------------------------------------------------------------
@@ -204,21 +214,92 @@ class HermesA2AHandler(RequestHandler):
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
         )
 
-        # 2. Stream chunks as artifact events
+        # 2. Stream chunks as artifact events with heartbeat keepalive
+        _HEARTBEAT_TIMEOUT = 15.0  # seconds
         collected: list[str] = []
-        async for chunk in self._hermes.send_message_stream(text, session_id):
-            collected.append(chunk)
-            yield TaskArtifactUpdateEvent(
+        new_session_id: str | None = None
+
+        try:
+            stream_iter = self._hermes.send_message_stream(
+                text, session_id
+            ).__aiter__()
+            # Use a task so asyncio.wait doesn't cancel the generator on
+            # timeout — keepalive heartbeats can be emitted while the same
+            # __anext__ call is still pending.
+            chunk_task: asyncio.Task | None = asyncio.ensure_future(
+                stream_iter.__anext__()
+            )
+            try:
+                while chunk_task is not None:
+                    done, _ = await asyncio.wait(
+                        {chunk_task}, timeout=_HEARTBEAT_TIMEOUT
+                    )
+                    if not done:
+                        # No chunk within the heartbeat window — emit a
+                        # keepalive WORKING event so the client knows we
+                        # are still alive, then keep waiting on the same
+                        # pending task.
+                        logger.debug(
+                            "stream heartbeat: task=%s context=%s",
+                            task_id, context_id,
+                        )
+                        yield TaskStatusUpdateEvent(
+                            task_id=task_id,
+                            context_id=context_id,
+                            status=TaskStatus(
+                                state=TaskState.TASK_STATE_WORKING,
+                            ),
+                        )
+                        continue
+
+                    # Task finished — retrieve result.
+                    try:
+                        chunk = chunk_task.result()
+                    except StopAsyncIteration:
+                        chunk_task = None
+                        break
+
+                    collected.append(chunk)
+                    yield TaskArtifactUpdateEvent(
+                        task_id=task_id,
+                        context_id=context_id,
+                        artifact=Artifact(parts=[_text_part(chunk)]),
+                        append=True,
+                        last_chunk=False,
+                    )
+                    # Schedule the next chunk read.
+                    chunk_task = asyncio.ensure_future(
+                        stream_iter.__anext__()
+                    )
+            finally:
+                # Clean up any still-pending task on early exit (error path).
+                if chunk_task is not None and not chunk_task.done():
+                    chunk_task.cancel()
+        except Exception as exc:
+            logger.error(
+                "message/stream failed: task=%s context=%s error=%s",
+                task_id, context_id, exc,
+                exc_info=True,
+            )
+            self._increment_metric("errors_total")
+            yield TaskStatusUpdateEvent(
                 task_id=task_id,
                 context_id=context_id,
-                artifact=Artifact(parts=[_text_part(chunk)]),
-                append=True,
-                last_chunk=False,
+                status=TaskStatus(
+                    state=TaskState.TASK_STATE_FAILED,
+                    message=Message(
+                        role="ROLE_AGENT",
+                        parts=[_text_part(f"Stream error: {exc}")],
+                    ),
+                ),
             )
+            return
 
         # 3. Final completed status event
         full_text = "".join(collected)
-        await self._save_session(context_id, session_id or str(uuid.uuid4()))
+        await self._save_session(
+            context_id, new_session_id or session_id or str(uuid.uuid4())
+        )
 
         final_task = _make_task(
             task_id, context_id, TaskState.TASK_STATE_COMPLETED, full_text
@@ -302,6 +383,10 @@ class HermesA2AHandler(RequestHandler):
 
         task_dict["status"]["state"] = "canceled"
         await self._store.save(task_dict, context)
+
+        # Fire-and-forget push notification
+        await self._push_notifier.deliver(params.id, "canceled", "Task canceled")
+
         return _make_task(
             task_dict["id"],
             task_dict.get("contextId", ""),
@@ -332,32 +417,41 @@ class HermesA2AHandler(RequestHandler):
         return ListTasksResponse(tasks=tasks)
 
     # ------------------------------------------------------------------
-    # Push notifications — not supported, raise cleanly
+    # Push notifications
     # ------------------------------------------------------------------
 
     async def on_create_task_push_notification_config(
         self, params, context
     ):
-        from a2a.utils.errors import PushNotificationNotSupportedError
-        raise PushNotificationNotSupportedError
+        config = self._push_store.create(params)
+        logger.info(
+            "Created push notification config id=%s for task=%s",
+            config.id, config.task_id,
+        )
+        return config
 
     async def on_get_task_push_notification_config(
         self, params, context
     ):
-        from a2a.utils.errors import PushNotificationNotSupportedError
-        raise PushNotificationNotSupportedError
+        config = self._push_store.get(params.task_id, params.id)
+        if config is None:
+            return None
+        return config
 
     async def on_list_task_push_notification_configs(
         self, params, context
     ):
-        from a2a.utils.errors import PushNotificationNotSupportedError
-        raise PushNotificationNotSupportedError
+        from a2a.types.a2a_pb2 import ListTaskPushNotificationConfigsResponse
+        configs = self._push_store.list_configs(params.task_id)
+        return ListTaskPushNotificationConfigsResponse(configs=configs)
 
     async def on_delete_task_push_notification_config(
         self, params, context
     ):
-        from a2a.utils.errors import PushNotificationNotSupportedError
-        raise PushNotificationNotSupportedError
+        deleted = self._push_store.delete(params.task_id, params.id)
+        if not deleted:
+            return None
+        return params
 
     async def on_subscribe_to_task(
         self, params, context

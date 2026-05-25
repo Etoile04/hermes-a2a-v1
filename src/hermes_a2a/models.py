@@ -51,6 +51,21 @@ class AuthConfig(BaseModel):
 
     enabled: bool = True
     token: str = ""
+    admin_token: str = ""  # Falls back to token when empty
+
+
+class RateLimitConfig(BaseModel):
+    """Rate limiting configuration."""
+
+    enabled: bool = True
+    requests_per_minute: int = 60
+    burst_size: int = 10
+
+
+class CORSConfig(BaseModel):
+    """CORS configuration."""
+
+    origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
 class TaskStoreConfig(BaseModel):
@@ -77,5 +92,7 @@ class GatewayConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     task_store: TaskStoreConfig = Field(default_factory=TaskStoreConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    cors: CORSConfig = Field(default_factory=CORSConfig)
     logging_level: str = "INFO"
     peers: list[PeerConfig] = Field(default_factory=list)

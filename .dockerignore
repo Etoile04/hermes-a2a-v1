@@ -1,0 +1,65 @@
+# =============================================================================
+# .dockerignore – exclude unnecessary files from Docker build context
+# =============================================================================
+
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Docker (prevent recursion)
+Dockerfile
+docker-compose.yaml
+docker-compose*.yml
+.dockerignore
+
+# Local config with secrets – mount via volume instead
+config-local.yaml
+config-*.yaml
+!config.example.yaml
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database files (mount via volume)
+*.db
+*.sqlite3

@@ -1,0 +1,80 @@
+# =============================================================================
+# Docker Compose for hermes-a2a-v1
+# =============================================================================
+# Usage:
+#   docker compose up -d                # Start gateway only
+#   docker compose --profile redis up -d # Start with Redis for caching/sessions
+#   docker compose --profile all up -d   # Start everything
+# =============================================================================
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/etoile04/hermes-a2a-v1:latest
+    container_name: hermes-a2a-gateway
+    restart: unless-stopped
+    ports:
+      - "${HERMES_A2A_PORT:-18800}:18800"
+    environment:
+      HERMES_A2A_CONFIG: /app/config/gateway.yaml
+    volumes:
+      - ./config-local.yaml:/app/config/gateway.yaml:ro
+      - gateway-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18800/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - hermes-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # -----------------------------------------------------------------------
+  # Optional Redis – enable with: docker compose --profile redis up -d
+  # -----------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    profiles:
+      - redis
+      - all
+    container_name: hermes-a2a-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - hermes-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  gateway-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  hermes-net:
+    driver: bridge
