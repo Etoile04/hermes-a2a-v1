@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Route
 
-from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes, create_rest_routes
 from a2a.types.a2a_pb2 import (
     AgentCapabilities,
     AgentCard,
@@ -273,8 +273,16 @@ def create_app(config_path: str | None = None) -> FastAPI:
         }
         return Response(content=json.dumps(result), media_type="application/json")
 
+    # REST endpoints at /a2a/ (A2A v1.0 + v0.3 compat)
+    rest_routes = create_rest_routes(
+        request_handler=handler,
+        path_prefix="/a2a",
+        enable_v0_3_compat=True,
+    )
+
     app.routes.extend(card_routes)
     app.routes.extend(rpc_routes)
+    app.routes.extend(rest_routes)
     app.routes.append(Route("/health", health, methods=["GET"]))
     app.routes.append(Route("/metrics", metrics, methods=["GET"]))
 
