@@ -82,7 +82,7 @@ def test_agent_card_endpoint(app_client):
     card = resp.json()
     assert card["name"] == "Hermes Agent"
     assert card["capabilities"]["streaming"] is True
-    assert card["capabilities"]["pushNotifications"] is False
+    assert card["capabilities"]["pushNotifications"] is True
     assert len(card["skills"]) >= 1
 
 

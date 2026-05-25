@@ -85,7 +85,7 @@ def _build_agent_card(cfg: Any) -> AgentCard:
         documentation_url=cfg.agent.documentation_url,
         capabilities=AgentCapabilities(
             streaming=True,
-            push_notifications=False,
+            push_notifications=True,
             extended_agent_card=False,
         ),
         skills=skills,
