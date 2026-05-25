@@ -60,6 +60,15 @@ class TaskStoreConfig(BaseModel):
     path: str = "~/.hermes/a2a-gateway/tasks.db"
 
 
+class PeerConfig(BaseModel):
+    """Configuration for a remote A2A peer agent."""
+
+    name: str
+    agent_card_url: str
+    auth_token: str = ""
+    enabled: bool = True
+
+
 class GatewayConfig(BaseModel):
     """Top-level gateway configuration."""
 
@@ -69,3 +78,4 @@ class GatewayConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     task_store: TaskStoreConfig = Field(default_factory=TaskStoreConfig)
     logging_level: str = "INFO"
+    peers: list[PeerConfig] = Field(default_factory=list)

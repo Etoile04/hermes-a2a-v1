@@ -35,6 +35,7 @@ from a2a.types.a2a_pb2 import (
 from hermes_a2a.a2a_handler import HermesA2AHandler
 from hermes_a2a.config import load_config
 from hermes_a2a.hermes_client import HermesClient
+from hermes_a2a.peer_manager import PeerManager
 from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_store import SQLiteTaskStore
 
@@ -137,6 +138,8 @@ def create_app(config_path: str | None = None) -> FastAPI:
     handler = HermesA2AHandler(hermes_client, task_store, session_store)
     agent_card = _build_agent_card(cfg)
 
+    peer_manager = PeerManager(cfg.peers)
+
     # Metrics counters (shared between handler and endpoints)
     _metrics_counters = {
         "requests_total": 0,
@@ -153,6 +156,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         "config": cfg,
         "start_time": None,  # set in lifespan
         "metrics": _metrics_counters,
+        "peer_manager": peer_manager,
     }
 
     # -- lifespan (init/cleanup async resources) ---------------------
@@ -185,6 +189,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         yield
         await session_store.close()
         await task_store.close()
+        await peer_manager.close()
         logger.info("Hermes A2A Gateway shut down")
 
     app = FastAPI(
@@ -285,6 +290,46 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.routes.extend(rest_routes)
     app.routes.append(Route("/health", health, methods=["GET"]))
     app.routes.append(Route("/metrics", metrics, methods=["GET"]))
+
+    # -- Peer management routes --------------------------------------
+    async def list_peers_endpoint(request: Request):
+        gw = request.app.state.gateway
+        pm: PeerManager = gw["peer_manager"]
+        peers = await pm.list_peers()
+        return Response(
+            content=json.dumps({"peers": peers}), media_type="application/json"
+        )
+
+    async def discover_peers_endpoint(request: Request):
+        gw = request.app.state.gateway
+        pm: PeerManager = gw["peer_manager"]
+        discovered = await pm.discover_all()
+        return Response(
+            content=json.dumps({"discovered": discovered}),
+            media_type="application/json",
+        )
+
+    async def relay_message_endpoint(request: Request):
+        gw = request.app.state.gateway
+        pm: PeerManager = gw["peer_manager"]
+        data = await request.json()
+        peer_name = data.get("peer_name")
+        message = data.get("message")
+        if not peer_name or not message:
+            return Response(
+                status_code=400,
+                content=json.dumps({"error": "Missing peer_name or message"}),
+            )
+        result = await pm.send_to_peer(peer_name, message, data.get("context_id"))
+        return Response(content=json.dumps(result), media_type="application/json")
+
+    app.routes.append(Route("/a2a/peers", list_peers_endpoint, methods=["GET"]))
+    app.routes.append(
+        Route("/a2a/peers/discover", discover_peers_endpoint, methods=["POST"])
+    )
+    app.routes.append(
+        Route("/a2a/relay", relay_message_endpoint, methods=["POST"])
+    )
 
     return app
 
