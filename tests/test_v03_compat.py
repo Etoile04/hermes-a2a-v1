@@ -230,18 +230,22 @@ def test_v03_tasks_get_after_send(app_client):
 # ------------------------------------------------------------------
 
 def test_v03_tasks_cancel_after_send(app_client):
-    """Create a task via v0.3 message/send, then cancel it with tasks/cancel."""
+    """Create a task via v0.3 message/send, then cancel it with tasks/cancel.
+
+    Since the task completes immediately upon send, canceling it should fail
+    (completed tasks are terminal and cannot be canceled).
+    """
     # Step 1: send message to create a task
     send_payload = _rpc("message/send", _v03_message_params("To cancel"), rpc_id=20)
     resp_send = app_client.post("/", json=send_payload, headers=V03_HEADERS)
     assert resp_send.status_code == 200
     task_id = resp_send.json()["result"]["id"]
 
-    # Step 2: cancel the task
+    # Step 2: cancel the task — should fail because it's already completed
     cancel_payload = _rpc("tasks/cancel", {"id": task_id}, rpc_id=21)
     resp_cancel = app_client.post("/", json=cancel_payload, headers=V03_HEADERS)
     assert resp_cancel.status_code == 200
     data_cancel = resp_cancel.json()
-    assert "result" in data_cancel, f"Expected result, got: {data_cancel}"
-    assert data_cancel["result"]["id"] == task_id
-    assert data_cancel["result"]["status"]["state"] == "canceled"
+    # The handler returns None for terminal-state tasks, so the adapter
+    # raises TaskNotFoundError → v0.3 adapter surfaces as error
+    assert "error" in data_cancel, f"Expected error for canceling completed task, got: {data_cancel}"

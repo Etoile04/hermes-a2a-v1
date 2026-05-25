@@ -28,12 +28,21 @@ class AgentSkillConfig(BaseModel):
     description: str = ""
 
 
+class AgentProviderConfig(BaseModel):
+    """Agent provider information."""
+
+    organization: str = "Hermes"
+    url: str = "https://github.com/Etoile04/hermes-a2a-v1"
+
+
 class AgentConfig(BaseModel):
     """Agent identity and capabilities."""
 
     name: str = "Hermes Agent"
     description: str = "AI Agent powered by Hermes via A2A v1.0"
     url: str = "http://localhost:18800"
+    documentation_url: str = "https://github.com/Etoile04/hermes-a2a-v1/blob/main/README.md"
+    provider: AgentProviderConfig = Field(default_factory=AgentProviderConfig)
     skills: list[AgentSkillConfig] = Field(default_factory=list)
 
 
@@ -51,6 +60,15 @@ class TaskStoreConfig(BaseModel):
     path: str = "~/.hermes/a2a-gateway/tasks.db"
 
 
+class PeerConfig(BaseModel):
+    """Configuration for a remote A2A peer agent."""
+
+    name: str
+    agent_card_url: str
+    auth_token: str = ""
+    enabled: bool = True
+
+
 class GatewayConfig(BaseModel):
     """Top-level gateway configuration."""
 
@@ -60,3 +78,4 @@ class GatewayConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     task_store: TaskStoreConfig = Field(default_factory=TaskStoreConfig)
     logging_level: str = "INFO"
+    peers: list[PeerConfig] = Field(default_factory=list)
