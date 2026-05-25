@@ -285,13 +285,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         enable_v0_3_compat=True,
     )
 
-    app.routes.extend(card_routes)
-    app.routes.extend(rpc_routes)
-    app.routes.extend(rest_routes)
-    app.routes.append(Route("/health", health, methods=["GET"]))
-    app.routes.append(Route("/metrics", metrics, methods=["GET"]))
-
-    # -- Peer management routes --------------------------------------
+    # -- Peer management route handlers ----------------------------
     async def list_peers_endpoint(request: Request):
         gw = request.app.state.gateway
         pm: PeerManager = gw["peer_manager"]
@@ -323,13 +317,20 @@ def create_app(config_path: str | None = None) -> FastAPI:
         result = await pm.send_to_peer(peer_name, message, data.get("context_id"))
         return Response(content=json.dumps(result), media_type="application/json")
 
-    app.routes.append(Route("/a2a/peers", list_peers_endpoint, methods=["GET"]))
-    app.routes.append(
-        Route("/a2a/peers/discover", discover_peers_endpoint, methods=["POST"])
-    )
-    app.routes.append(
-        Route("/a2a/relay", relay_message_endpoint, methods=["POST"])
-    )
+    # Register custom routes BEFORE rest_routes to avoid being shadowed
+    # by the SDK's catch-all /{tenant} route.
+    peer_routes = [
+        Route("/a2a/peers", list_peers_endpoint, methods=["GET"]),
+        Route("/a2a/peers/discover", discover_peers_endpoint, methods=["POST"]),
+        Route("/a2a/relay", relay_message_endpoint, methods=["POST"]),
+    ]
+
+    app.routes.extend(card_routes)
+    app.routes.extend(rpc_routes)
+    app.routes.extend(peer_routes)  # custom routes before REST catch-all
+    app.routes.extend(rest_routes)
+    app.routes.append(Route("/health", health, methods=["GET"]))
+    app.routes.append(Route("/metrics", metrics, methods=["GET"]))
 
     return app
 
