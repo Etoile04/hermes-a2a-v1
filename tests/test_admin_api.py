@@ -6,11 +6,24 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
+
+def _run(coro):
+    """Run an async coroutine synchronously (Python 3.11+ compatible).
+
+    Uses a dedicated event loop to avoid conflicts with Starlette's
+    TestClient which manages its own loop internally.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 import pytest
 from fastapi.testclient import TestClient
 
 from hermes_a2a.models import AuthConfig, GatewayConfig, PeerConfig, TaskStoreConfig
-
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -178,7 +191,7 @@ class TestAdminTasksList:
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
 
-        asyncio.get_event_loop().run_until_complete(ts.save({
+        _run(ts.save({
             "id": "task-1",
             "contextId": "ctx-1",
             "status": {"state": 1},
@@ -193,11 +206,10 @@ class TestAdminTasksList:
     def test_filter_by_status(self, app_client):
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
-        loop = asyncio.get_event_loop()
 
-        loop.run_until_complete(ts.save({"id": "t1", "status": {"state": 1}}))
-        loop.run_until_complete(ts.save({"id": "t2", "status": {"state": 2}}))
-        loop.run_until_complete(ts.save({"id": "t3", "status": {"state": 1}}))
+        _run(ts.save({"id": "t1", "status": {"state": 1}}))
+        _run(ts.save({"id": "t2", "status": {"state": 2}}))
+        _run(ts.save({"id": "t3", "status": {"state": 1}}))
 
         resp = app_client.get("/admin/tasks?status=1")
         data = resp.json()
@@ -206,10 +218,9 @@ class TestAdminTasksList:
     def test_filter_by_context_id(self, app_client):
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
-        loop = asyncio.get_event_loop()
 
-        loop.run_until_complete(ts.save({"id": "t1", "contextId": "ctx-a"}))
-        loop.run_until_complete(ts.save({"id": "t2", "contextId": "ctx-b"}))
+        _run(ts.save({"id": "t1", "contextId": "ctx-a"}))
+        _run(ts.save({"id": "t2", "contextId": "ctx-b"}))
 
         resp = app_client.get("/admin/tasks?context_id=ctx-a")
         data = resp.json()
@@ -219,10 +230,9 @@ class TestAdminTasksList:
     def test_limit_param(self, app_client):
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
-        loop = asyncio.get_event_loop()
 
         for i in range(5):
-            loop.run_until_complete(ts.save({"id": f"t-{i}", "status": {"state": 1}}))
+            _run(ts.save({"id": f"t-{i}", "status": {"state": 1}}))
 
         resp = app_client.get("/admin/tasks?limit=2")
         data = resp.json()
@@ -239,8 +249,7 @@ class TestAdminTasksDelete:
     def test_delete_existing_task(self, app_client):
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(ts.save({"id": "del-me", "status": {"state": 1}}))
+        _run(ts.save({"id": "del-me", "status": {"state": 1}}))
 
         resp = app_client.delete("/admin/tasks/del-me")
         assert resp.status_code == 200
@@ -295,10 +304,9 @@ class TestAdminMetrics:
     def test_metrics_shows_task_counts_by_status(self, app_client):
         gw = app_client.app.state.gateway
         ts = gw["task_store"]
-        loop = asyncio.get_event_loop()
 
-        loop.run_until_complete(ts.save({"id": "m1", "status": {"state": 1}}))
-        loop.run_until_complete(ts.save({"id": "m2", "status": {"state": 2}}))
+        _run(ts.save({"id": "m1", "status": {"state": 1}}))
+        _run(ts.save({"id": "m2", "status": {"state": 2}}))
 
         resp = app_client.get("/admin/metrics")
         data = resp.json()
