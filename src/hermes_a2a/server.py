@@ -19,7 +19,9 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.routing import Route
+from starlette.responses import HTMLResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes, create_rest_routes
 from a2a.types.a2a_pb2 import (
@@ -40,6 +42,7 @@ from hermes_a2a.peer_manager import PeerManager
 from hermes_a2a.rate_limiter import TokenBucketRateLimiter
 from hermes_a2a.session_store import SessionStore
 from hermes_a2a.task_store import SQLiteTaskStore
+from hermes_a2a.ws_broadcaster import WebSocketBroadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +133,27 @@ def _make_auth_middleware(token: str, admin_token: str = ""):
 
 
 # ------------------------------------------------------------------
+# WebSocket handler factory
+# ------------------------------------------------------------------
+
+def _make_ws_handler(broadcaster: WebSocketBroadcaster):
+    """Create a WS route handler for /admin/ws."""
+    from starlette.websockets import WebSocket, WebSocketDisconnect
+
+    async def ws_endpoint(ws: WebSocket):
+        await broadcaster.connect(ws)
+        try:
+            while True:
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await broadcaster.disconnect(ws)
+
+    return ws_endpoint
+
+
+# ------------------------------------------------------------------
 # App factory
 # ------------------------------------------------------------------
 
@@ -155,6 +179,9 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     peer_manager = PeerManager(cfg.peers)
 
+    # WebSocket broadcaster for live updates
+    ws_broadcaster = WebSocketBroadcaster()
+
     # Metrics counters (shared between handler and endpoints)
     _metrics_counters = {
         "requests_total": 0,
@@ -172,6 +199,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         "start_time": None,  # set in lifespan
         "metrics": _metrics_counters,
         "peer_manager": peer_manager,
+        "ws_broadcaster": ws_broadcaster,
     }
 
     # -- lifespan (init/cleanup async resources) ---------------------
@@ -201,7 +229,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
             "version": VERSION,
         }
         logger.info("Hermes A2A Gateway starting — config=%s", json.dumps(safe_cfg))
+        # Start WS broadcaster metrics loop
+        await ws_broadcaster.start_metrics_loop(app_state)
         yield
+        await ws_broadcaster.stop_metrics_loop()
         await session_store.close()
         await task_store.close()
         await peer_manager.close()
@@ -352,6 +383,15 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.routes.extend(rpc_routes)
     app.routes.extend(peer_routes)  # custom routes before REST catch-all
     app.routes.extend(create_admin_routes())  # admin routes before REST catch-all
+
+    # Dashboard
+    import pathlib as _pl
+    _dashboard_dir = _pl.Path(__file__).parent / "dashboard"
+    app.routes.append(Mount("/admin/dashboard", app=StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard"))
+
+    # WebSocket live updates
+    app.routes.append(Route("/admin/ws", _make_ws_handler(ws_broadcaster), methods=["GET"]))
+
     app.routes.extend(rest_routes)
     app.routes.append(Route("/health", health, methods=["GET"]))
     app.routes.append(Route("/metrics", metrics, methods=["GET"]))

@@ -7,11 +7,13 @@ app's gateway state via ``request.app.state.gateway``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
 
 from fastapi import Request, Response
+from sse_starlette.sse import EventSourceResponse
 from starlette.routing import Route
 
 from hermes_a2a.models import PeerConfig
@@ -260,6 +262,75 @@ def _make_admin_metrics() -> Any:
 
 
 # ------------------------------------------------------------------
+# SSE Metrics Stream
+# ------------------------------------------------------------------
+
+
+async def _collect_stream_metrics(gw: dict) -> dict[str, Any]:
+    """Collect metrics payload for SSE stream and WS broadcast."""
+    m = gw.get("metrics", {})
+    handler_ref = gw.get("handler")
+    ts = gw.get("task_store")
+    pm = gw.get("peer_manager")
+
+    active_tasks = 0
+    if ts is not None:
+        try:
+            all_tasks = await ts.list()
+            active_tasks = len(all_tasks)
+        except Exception:
+            all_tasks = []
+    else:
+        all_tasks = []
+
+    peer_health: dict[str, str] = {}
+    if pm is not None:
+        try:
+            peer_health = pm.peer_status
+        except Exception:
+            pass
+
+    return {
+        "request_count": m.get("requests_total", 0),
+        "errors_total": m.get("errors_total", 0),
+        "latency_p50": 0,
+        "latency_p95": 0,
+        "latency_p99": 0,
+        "active_tasks": active_tasks,
+        "peer_health": peer_health,
+    }
+
+
+def _make_admin_metrics_stream(interval: float = 5.0) -> Any:
+    """GET /admin/metrics/stream — SSE endpoint pushing metrics every *interval* seconds."""
+
+    async def handler(request: Request) -> EventSourceResponse:
+        gw = request.app.state.gateway
+        # Allow tests to limit the number of events via ?max_events=N
+        max_events = request.query_params.get("max_events")
+        max_events = int(max_events) if max_events else None
+
+        async def event_generator():
+            count = 0
+            while True:
+                if await request.is_disconnected():
+                    break
+                metrics = await _collect_stream_metrics(gw)
+                yield {
+                    "event": "metrics",
+                    "data": json.dumps(metrics),
+                }
+                count += 1
+                if max_events is not None and count >= max_events:
+                    break
+                await asyncio.sleep(interval)
+
+        return EventSourceResponse(event_generator())
+
+    return handler
+
+
+# ------------------------------------------------------------------
 # Public helper: build all admin routes
 # ------------------------------------------------------------------
 
@@ -277,4 +348,5 @@ def create_admin_routes() -> list[Route]:
         Route("/admin/tasks", _make_admin_tasks_list(), methods=["GET"]),
         Route("/admin/tasks/{task_id}", _make_admin_tasks_delete(), methods=["DELETE"]),
         Route("/admin/metrics", _make_admin_metrics(), methods=["GET"]),
+        Route("/admin/metrics/stream", _make_admin_metrics_stream(), methods=["GET"]),
     ]
