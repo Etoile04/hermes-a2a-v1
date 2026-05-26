@@ -361,3 +361,47 @@ class TestAdminAuth:
             with TestClient(app) as client:
                 resp = client.get("/admin/peers")
                 assert resp.status_code == 401
+
+
+# ------------------------------------------------------------------
+# GET /admin/metrics/stream (SSE)
+# ------------------------------------------------------------------
+
+class TestAdminMetricsStream:
+    """GET /admin/metrics/stream — SSE endpoint."""
+
+    def test_sse_returns_event_stream_content_type(self, app_client):
+        """SSE endpoint should return text/event-stream content type."""
+        with app_client.stream("GET", "/admin/metrics/stream?max_events=1") as resp:
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers.get("content-type", "")
+
+    def test_sse_payload_has_expected_fields(self, app_client):
+        """Each SSE event should contain valid JSON with metrics fields."""
+        with app_client.stream("GET", "/admin/metrics/stream?max_events=1") as resp:
+            found_data = False
+            for line in resp.iter_lines():
+                if line.startswith("data:"):
+                    payload = json.loads(line[len("data:"):].strip())
+                    assert "request_count" in payload
+                    assert "active_tasks" in payload
+                    assert "peer_health" in payload
+                    assert "latency_p50" in payload
+                    assert "latency_p95" in payload
+                    assert "latency_p99" in payload
+                    found_data = True
+                    break
+        assert found_data, "No SSE data line received"
+
+    def test_sse_reflects_tasks(self, app_client):
+        """SSE metrics should reflect tasks in the store."""
+        gw = app_client.app.state.gateway
+        ts = gw["task_store"]
+        _run(ts.save({"id": "sse-task", "status": {"state": 1}}))
+
+        with app_client.stream("GET", "/admin/metrics/stream?max_events=1") as resp:
+            for line in resp.iter_lines():
+                if line.startswith("data:"):
+                    payload = json.loads(line[len("data:"):].strip())
+                    assert payload["active_tasks"] >= 1
+                    break
