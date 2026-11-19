@@ -35,6 +35,10 @@ class HermesClient:
         read_timeout: int = 60,
         connect_timeout: int = 10,
         write_timeout: int = 10,
+        fallback_url: str = "",
+        fallback_model: str = "",
+        fallback_timeout: int = 300,
+        fallback_api_key: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -42,6 +46,11 @@ class HermesClient:
         self._read_timeout = read_timeout
         self._connect_timeout = connect_timeout
         self._write_timeout = write_timeout
+        # Fallback LLM (e.g. local llama.cpp)
+        self._fallback_url = fallback_url.rstrip("/") if fallback_url else ""
+        self._fallback_model = fallback_model
+        self._fallback_timeout = fallback_timeout
+        self._fallback_api_key = fallback_api_key
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -211,6 +220,76 @@ class HermesClient:
                 raise self._classify_and_raise(exc, url=url) from exc
 
     # ------------------------------------------------------------------
+    # Fallback to local LLM
+    # ------------------------------------------------------------------
+
+    def _has_fallback(self) -> bool:
+        return bool(self._fallback_url)
+
+    async def _send_to_fallback_nonstream(self, text: str) -> httpx.Response:
+        """Send non-streaming request to fallback LLM."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._fallback_api_key:
+            headers["Authorization"] = f"Bearer {self._fallback_api_key}"
+
+        payload = {
+            "model": self._fallback_model,
+            "messages": [{"role": "user", "content": text}],
+            "stream": False,
+        }
+
+        timeout_cfg = httpx.Timeout(
+            connect=self._connect_timeout,
+            read=self._read_timeout,
+            write=self._write_timeout,
+            pool=self._fallback_timeout,
+        )
+
+        url = f"{self._fallback_url}/v1/chat/completions"
+        async with httpx.AsyncClient(timeout=timeout_cfg) as http:
+            resp = await http.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return resp
+
+    async def _fallback_stream_chunks(self, text: str) -> AsyncGenerator[str, None]:
+        """Yield text chunks from fallback LLM stream."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._fallback_api_key:
+            headers["Authorization"] = f"Bearer {self._fallback_api_key}"
+
+        payload = {
+            "model": self._fallback_model,
+            "messages": [{"role": "user", "content": text}],
+            "stream": True,
+        }
+
+        timeout_cfg = httpx.Timeout(
+            connect=self._connect_timeout,
+            read=self._read_timeout,
+            write=self._write_timeout,
+            pool=self._fallback_timeout,
+        )
+
+        url = f"{self._fallback_url}/v1/chat/completions"
+        async with httpx.AsyncClient(timeout=timeout_cfg) as http:
+            async with http.stream("POST", url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[len("data: "):]
+                    if data_str.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        c = delta.get("content")
+                        if c:
+                            yield c
+                    except json.JSONDecodeError:
+                        continue
+
+    # ------------------------------------------------------------------
     # Non-streaming
     # ------------------------------------------------------------------
 
@@ -238,13 +317,29 @@ class HermesClient:
         try:
             resp = await self._request_with_retry(url=url, payload=payload, headers=headers)
         except Exception as exc:
-            duration_ms = round((asyncio.get_event_loop().time() - t0) * 1000, 1)
-            logger.error(
-                "POST %s failed: duration_ms=%.1f error_type=%s error=%s",
-                url, duration_ms, type(exc).__name__, exc,
-                exc_info=True,
-            )
-            raise
+            if self._has_fallback():
+                logger.warning(
+                    "Primary Hermes API failed (%s), falling back to %s",
+                    exc, self._fallback_url,
+                )
+                try:
+                    resp = await self._send_to_fallback_nonstream(text)
+                except Exception as fb_exc:
+                    duration_ms = round((asyncio.get_event_loop().time() - t0) * 1000, 1)
+                    logger.error(
+                        "Fallback also failed: duration_ms=%.1f error=%s",
+                        duration_ms, fb_exc,
+                        exc_info=True,
+                    )
+                    raise
+            else:
+                duration_ms = round((asyncio.get_event_loop().time() - t0) * 1000, 1)
+                logger.error(
+                    "POST %s failed: duration_ms=%.1f error_type=%s error=%s",
+                    url, duration_ms, type(exc).__name__, exc,
+                    exc_info=True,
+                )
+                raise
         data = resp.json()
         duration_ms = round((asyncio.get_event_loop().time() - t0) * 1000, 1)
         logger.info(

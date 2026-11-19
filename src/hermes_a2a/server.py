@@ -170,6 +170,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
         base_url=cfg.hermes.api_url,
         timeout=cfg.hermes.timeout,
         api_key=cfg.hermes.api_key or None,
+        fallback_url=cfg.fallback.api_url if cfg.fallback.enabled else "",
+        fallback_model=cfg.fallback.model,
+        fallback_timeout=cfg.fallback.timeout,
+        fallback_api_key=cfg.fallback.api_key or "",
     )
     task_store = SQLiteTaskStore(cfg.task_store.path)
     session_store = SessionStore(cfg.task_store.path)  # share same SQLite DB

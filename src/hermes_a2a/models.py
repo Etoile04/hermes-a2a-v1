@@ -84,6 +84,16 @@ class PeerConfig(BaseModel):
     enabled: bool = True
 
 
+class FallbackConfig(BaseModel):
+    """Fallback LLM configuration for when primary Hermes API is unavailable."""
+
+    enabled: bool = False
+    api_url: str = "http://localhost:8081"
+    model: str = "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+    timeout: int = 300
+    api_key: str = ""
+
+
 class GatewayConfig(BaseModel):
     """Top-level gateway configuration."""
 
@@ -96,3 +106,4 @@ class GatewayConfig(BaseModel):
     cors: CORSConfig = Field(default_factory=CORSConfig)
     logging_level: str = "INFO"
     peers: list[PeerConfig] = Field(default_factory=list)
+    fallback: FallbackConfig = Field(default_factory=FallbackConfig)
